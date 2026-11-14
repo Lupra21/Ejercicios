@@ -2,30 +2,34 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
-#include <atomic>
 
 using namespace std;
 
 // Capacidades máximas según la letra
 const int MAX_PIZZAS = 4;
 const int MAX_POSTRES = 3;
-bool ejecutando = true;
+volatile bool ejecutando = true;   // volatile: la modifica el main y la leen los hilos
+
 // Inventario compartido
 int pizzas_disponibles = 0;
 int postres_disponibles = 0;
-// Semáforos y Mutex para Pizzas
-sem_t sem_pizzas_vacio; 
-sem_t sem_pizzas_lleno;
-// Semáforos y Mutex para Postres
-sem_t sem_postres_vacio;
-sem_t sem_postres_lleno;
-pthread_mutex_t mutex_postres;
+
+// Semáforos para Pizzas
+sem_t sem_pizzas_vacio;    // contador: lugares libres (inicia en 4)
+sem_t sem_pizzas_lleno;    // sincronización: pizzas listas (inicia en 0)
+sem_t sem_mutex_pizzas;    // mutex: exclusión mutua (inicia en 1)
+
+// Semáforos para Postres
+sem_t sem_postres_vacio;   // contador: lugares libres (inicia en 3)
+sem_t sem_postres_lleno;   // sincronización: postres listos (inicia en 0)
+sem_t sem_mutex_postres;   // mutex: exclusión mutua (inicia en 1)
+
 // Hilo 1: Productor de pizzas (cada 3 segundos)
 void* producir_pizzas(void* arg) {
     while (ejecutando) {
         // Espera 3 segundos simulando el horneado (FUERA de la sección crítica)
         for (int i = 0; i < 3 && ejecutando; i++) {
-            sleep(3);
+            sleep(1);
         }
         if (!ejecutando) break;
 
@@ -37,10 +41,10 @@ void* producir_pizzas(void* arg) {
         // wait(mutex): solo un hilo a la vez toca el contador de pizzas
         sem_wait(&sem_mutex_pizzas);
             // ---- SECCIÓN CRÍTICA (escribir buffer) ----
-            pizzas++;                    // agrego la pizza a la mesada
-            int actual = pizzas;         // copia para imprimir fuera de la sección crítica
+            pizzas_disponibles++;                  // agrego la pizza a la mesada
+            int actual = pizzas_disponibles;       // copia para imprimir fuera
             // -------------------------------------------
-        sem_post(&sem_mutex_pizzas);     // signal(mutex): libera el acceso
+        sem_post(&sem_mutex_pizzas);               // signal(mutex): libera el acceso
 
         // signal(full): hay una pizza más disponible para el consumidor
         sem_post(&sem_pizzas_lleno);
@@ -55,7 +59,7 @@ void* producir_postres(void* arg) {
     while (ejecutando) {
         // Espera 4 segundos simulando la preparación (FUERA de la sección crítica)
         for (int i = 0; i < 4 && ejecutando; i++) {
-            sleep(4);
+            sleep(1);
         }
         if (!ejecutando) break;
 
@@ -81,7 +85,7 @@ void* producir_postres(void* arg) {
 
 // Función auxiliar para procesar pedidos de pizzas
 void pedir_pizzas() {
-    int cantidad;
+    int cantidad = 0;
     cout << "Ingrese cantidad de pizzas a pedir (1-" << MAX_PIZZAS << "): ";
     cin >> cantidad;
 
@@ -109,57 +113,56 @@ void pedir_pizzas() {
 
 // Función auxiliar para procesar pedidos de postres
 void pedir_postres() {
-    int cantidad;
+    int cantidad = 0;
     cout << "Ingrese cantidad de postres a pedir (1-" << MAX_POSTRES << "): ";
     cin >> cantidad;
 
-    if (cin.fail() || cantidad <= 0 || cantidad > MAX_POSTRES) {
-        cin.clear();
-        cin.ignore(10000, '\n');
+    // Validación del enunciado: positiva y no mayor a la capacidad
+    if (cantidad <= 0 || cantidad > MAX_POSTRES) {
         cout << "[Error] Cantidad invalida. Debe ser entre 1 y " << MAX_POSTRES << ".\n";
         return;
     }
 
-    pthread_mutex_lock(&mutex_postres);
+    sem_wait(&sem_mutex_postres);             // entro a la sección crítica
     if (postres_disponibles >= cantidad) {
         for (int i = 0; i < cantidad; i++) {
-            sem_wait(&sem_postres_lleno);
-            postres_disponibles--;
-            sem_post(&sem_postres_vacio); // Libera espacio en la heladera
+            sem_wait(&sem_postres_lleno);     // wait(full): consumo un postre listo
+            postres_disponibles--;            // SECCIÓN CRÍTICA: lo saco de la heladera
+            sem_post(&sem_postres_vacio);     // signal(empty): libero un lugar
         }
         cout << "[Exito] Se entregaron " << cantidad << " postre(s).\n";
     } else {
-        cout << "[Aviso] No hay suficientes postres disponibles. Stock actual: " 
+        cout << "[Aviso] No hay suficientes postres disponibles. Stock actual: "
              << postres_disponibles << "\n";
     }
-    pthread_mutex_unlock(&mutex_postres);
+    sem_post(&sem_mutex_postres);             // salgo de la sección crítica
 }
 
 // Función para consultar inventario
 void consultar_inventario() {
-    pthread_mutex_lock(&mutex_pizzas);
+    sem_wait(&sem_mutex_pizzas);
     int p = pizzas_disponibles;
-    pthread_mutex_unlock(&mutex_pizzas);
+    sem_post(&sem_mutex_pizzas);
 
-    pthread_mutex_lock(&mutex_postres);
+    sem_wait(&sem_mutex_postres);
     int d = postres_disponibles;
-    pthread_mutex_unlock(&mutex_postres);
+    sem_post(&sem_mutex_postres);
 
     cout << "\n--- INVENTARIO ACTUAL ---\n";
-    cout << "Pizzas en mesada:   " << p << " / " << MAX_PIZZAS << "\n";
+    cout << "Pizzas en mesada:    " << p << " / " << MAX_PIZZAS << "\n";
     cout << "Postres en heladera: " << d << " / " << MAX_POSTRES << "\n";
     cout << "-------------------------\n";
 }
 
 int main() {
-    // 1. Inicializar semáforos y mutex
+    // 1. Inicializar semáforos: sem_init(&sem, 0, valor_inicial)
     sem_init(&sem_pizzas_vacio, 0, MAX_PIZZAS);
     sem_init(&sem_pizzas_lleno, 0, 0);
-    pthread_mutex_init(&mutex_pizzas, nullptr);
+    sem_init(&sem_mutex_pizzas, 0, 1);
 
     sem_init(&sem_postres_vacio, 0, MAX_POSTRES);
     sem_init(&sem_postres_lleno, 0, 0);
-    pthread_mutex_init(&mutex_postres, nullptr);
+    sem_init(&sem_mutex_postres, 0, 1);
 
     // 2. Crear hilos productores
     pthread_t hilo_pizzas, hilo_postres;
@@ -178,9 +181,11 @@ int main() {
         cin >> opcion;
 
         if (cin.fail()) {
+            if (cin.eof()) break;     // fin de entrada: salgo para no quedar en bucle
             cin.clear();
             cin.ignore(10000, '\n');
             cout << "[Error] Ingrese un numero valido.\n";
+            opcion = 0;
             continue;
         }
 
@@ -211,14 +216,14 @@ int main() {
     pthread_join(hilo_pizzas, nullptr);
     pthread_join(hilo_postres, nullptr);
 
-    // 5. Destruir semáforos y mutex
+    // 5. Destruir semáforos
     sem_destroy(&sem_pizzas_vacio);
     sem_destroy(&sem_pizzas_lleno);
-    pthread_mutex_destroy(&mutex_pizzas);
+    sem_destroy(&sem_mutex_pizzas);
 
     sem_destroy(&sem_postres_vacio);
     sem_destroy(&sem_postres_lleno);
-    pthread_mutex_destroy(&mutex_postres);
+    sem_destroy(&sem_mutex_postres);
 
     cout << "Programa finalizado correctamente.\n";
     return 0;
