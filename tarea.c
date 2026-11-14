@@ -29,7 +29,7 @@ void* producir_pizzas(void* arg) {
     while (ejecutando) {
         // Espera 3 segundos simulando el horneado (FUERA de la sección crítica)
         for (int i = 0; i < 3 && ejecutando; i++) {
-            sleep(1);
+            sleep(3);
         }
         if (!ejecutando) break;
 
@@ -59,7 +59,7 @@ void* producir_postres(void* arg) {
     while (ejecutando) {
         // Espera 4 segundos simulando la preparación (FUERA de la sección crítica)
         for (int i = 0; i < 4 && ejecutando; i++) {
-            sleep(1);
+            sleep(4);
         }
         if (!ejecutando) break;
 
