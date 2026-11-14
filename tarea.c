@@ -9,40 +9,45 @@ using namespace std;
 // Capacidades máximas según la letra
 const int MAX_PIZZAS = 4;
 const int MAX_POSTRES = 3;
-
+bool ejecutando = true;
 // Inventario compartido
 int pizzas_disponibles = 0;
 int postres_disponibles = 0;
-
-
-
 // Semáforos y Mutex para Pizzas
 sem_t sem_pizzas_vacio; 
 sem_t sem_pizzas_lleno;
-
-
 // Semáforos y Mutex para Postres
 sem_t sem_postres_vacio;
 sem_t sem_postres_lleno;
 pthread_mutex_t mutex_postres;
-
-
 // Hilo 1: Productor de pizzas (cada 3 segundos)
 void* producir_pizzas(void* arg) {
     while (ejecutando) {
-        // Espera 3 segundos simulando el horneado
+        // Espera 3 segundos simulando el horneado (FUERA de la sección crítica)
         for (int i = 0; i < 3 && ejecutando; i++) {
-            sleep(1);
+            sleep(3);
         }
         if (!ejecutando) break;
 
-        // Espera a que haya lugar en la mesada (si está llena, se bloquea aquí)
+        // wait(empty): averigua si hay lugar en la mesada.
+        // Si está llena (empty = 0), el productor se bloquea acá.
         sem_wait(&sem_pizzas_vacio);
-        if (!ejecutando) break;
+        if (!ejecutando) break;   // me despertaron para terminar, no produzco
 
-        // Indica que hay una nueva pizza disponible
+        // wait(mutex): solo un hilo a la vez toca el contador de pizzas
+        sem_wait(&sem_mutex_pizzas);
+            // ---- SECCIÓN CRÍTICA (escribir buffer) ----
+            pizzas++;                    // agrego la pizza a la mesada
+            int actual = pizzas;         // copia para imprimir fuera de la sección crítica
+            // -------------------------------------------
+        sem_post(&sem_mutex_pizzas);     // signal(mutex): libera el acceso
+
+        // signal(full): hay una pizza más disponible para el consumidor
         sem_post(&sem_pizzas_lleno);
+
+        cout << "[Horno] Pizza lista. Pizzas en la mesada: " << actual << endl;
     }
+    return NULL;
 }
 
 // Hilo 2: Productor de postres (cada 4 segundos)
