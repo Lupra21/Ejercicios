@@ -45,7 +45,7 @@ void* producir_pizzas(void* arg) {
         // signal(full): hay una pizza más disponible para el consumidor
         sem_post(&sem_pizzas_lleno);
 
-        cout << "[Horno] Pizza lista. Pizzas en la mesada: " << actual << endl;
+        cout << "Pizza lista. Pizzas en la mesada: " << actual << endl;
     }
     return NULL;
 }
@@ -53,24 +53,30 @@ void* producir_pizzas(void* arg) {
 // Hilo 2: Productor de postres (cada 4 segundos)
 void* producir_postres(void* arg) {
     while (ejecutando) {
-        // Espera 4 segundos simulando la preparación
+        // Espera 4 segundos simulando la preparación (FUERA de la sección crítica)
         for (int i = 0; i < 4 && ejecutando; i++) {
-            sleep(1);
+            sleep(4);
         }
         if (!ejecutando) break;
 
-        // Espera a que haya lugar en la heladera (si está llena, se bloquea aquí)
+        // wait(empty): ¿hay lugar en la heladera? Si está llena, se bloquea aquí
         sem_wait(&sem_postres_vacio);
-        if (!ejecutando) break;
+        if (!ejecutando) break;   // me despertaron para terminar, no produzco
 
-        pthread_mutex_lock(&mutex_postres);
-        postres_disponibles++;
-        pthread_mutex_unlock(&mutex_postres);
+        // wait(mutex): solo un hilo a la vez toca el contador de postres
+        sem_wait(&sem_mutex_postres);
+            // ---- SECCIÓN CRÍTICA (escribir buffer) ----
+            postres_disponibles++;
+            int actual = postres_disponibles;   // copia para imprimir fuera
+            // -------------------------------------------
+        sem_post(&sem_mutex_postres);           // signal(mutex)
 
-        // Indica que hay un nuevo postre disponible
+        // signal(full): hay un nuevo postre disponible
         sem_post(&sem_postres_lleno);
+
+        cout << "Postre listo. Postres en la heladera: " << actual << endl;
     }
-    return nullptr;
+    return NULL;
 }
 
 // Función auxiliar para procesar pedidos de pizzas
@@ -79,27 +85,26 @@ void pedir_pizzas() {
     cout << "Ingrese cantidad de pizzas a pedir (1-" << MAX_PIZZAS << "): ";
     cin >> cantidad;
 
-    if (cin.fail() || cantidad <= 0 || cantidad > MAX_PIZZAS) {
-        cin.clear();
-        cin.ignore(10000, '\n');
+    // Validación del enunciado: positiva y no mayor a la capacidad
+    if (cantidad <= 0 || cantidad > MAX_PIZZAS) {
         cout << "[Error] Cantidad invalida. Debe ser entre 1 y " << MAX_PIZZAS << ".\n";
         return;
     }
 
-    pthread_mutex_lock(&mutex_pizzas);
+    sem_wait(&sem_mutex_pizzas);              // entro a la sección crítica
     if (pizzas_disponibles >= cantidad) {
-        // Consumimos las 'cantidad' unidades en los semáforos
+        // Hay suficientes: las retiro una por una
         for (int i = 0; i < cantidad; i++) {
-            sem_wait(&sem_pizzas_lleno);
-            pizzas_disponibles--;
-            sem_post(&sem_pizzas_vacio); // Libera espacio en la mesada
+            sem_wait(&sem_pizzas_lleno);      // wait(full): consumo una pizza lista
+            pizzas_disponibles--;             // SECCIÓN CRÍTICA: la saco de la mesada
+            sem_post(&sem_pizzas_vacio);      // signal(empty): libero un lugar
         }
         cout << "[Exito] Se entregaron " << cantidad << " pizza(s).\n";
     } else {
-        cout << "[Aviso] No hay suficientes pizzas disponibles. Stock actual: " 
+        cout << "[Aviso] No hay suficientes pizzas disponibles. Stock actual: "
              << pizzas_disponibles << "\n";
     }
-    pthread_mutex_unlock(&mutex_pizzas);
+    sem_post(&sem_mutex_pizzas);              // salgo de la sección crítica
 }
 
 // Función auxiliar para procesar pedidos de postres
